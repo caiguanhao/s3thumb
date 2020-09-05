@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -42,6 +45,8 @@ type (
 		Bucket string
 		Key    string
 		Format string
+		Width  int
+		Height int
 	}
 
 	Option struct {
@@ -77,19 +82,21 @@ func (f *File) GetFormat() (err error) {
 		log.WithError(err).WithField("filename", localFile).Error("failed to open file")
 		return
 	}
-	bytes := make([]byte, 4)
-	file.ReadAt(bytes, 0)
-	if bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 {
-		f.Format = "png"
-	} else if bytes[0] == 0xFF && bytes[1] == 0xD8 {
-		f.Format = "jpg"
-	} else if bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38 {
-		f.Format = "gif"
+	defer file.Close()
+	var config image.Config
+	config, f.Format, err = image.DecodeConfig(file)
+	if err != nil {
+		log.WithError(err).WithField("filename", localFile).Error("failed to open image")
+		return
 	}
 	if f.Format == "" {
 		err = errors.New("no format")
 		return
+	} else if f.Format == "jpeg" {
+		f.Format = "jpg"
 	}
+	f.Width = config.Width
+	f.Height = config.Height
 	return
 }
 
@@ -126,29 +133,35 @@ func (f *File) Download() (err error) {
 func (f *File) ResizeAndUpload(width, height int, suffix string) (err error) {
 	localFile := f.LocalFile()
 
-	var img image.Image
-	img, err = imaging.Open(localFile)
-	if err != nil {
-		log.WithError(err).WithField("filename", localFile).Error("failed to open file")
-		return
-	}
+	var targetFile string
 
-	tmpFile := filepath.Join(os.TempDir(), randomString(10)+"."+f.Format)
+	if width > f.Width && height > f.Height {
+		targetFile = localFile
+	} else {
+		var img image.Image
+		img, err = imaging.Open(localFile)
+		if err != nil {
+			log.WithError(err).WithField("filename", localFile).Error("failed to open file")
+			return
+		}
 
-	thumb := imaging.Thumbnail(img, width, height, imaging.CatmullRom)
-	dst := imaging.New(width, height, color.NRGBA{0, 0, 0, 0})
-	dst = imaging.Paste(dst, thumb, image.Pt(0, 0))
+		targetFile = filepath.Join(os.TempDir(), randomString(10)+"."+f.Format)
 
-	err = imaging.Save(dst, tmpFile)
-	if err != nil {
-		log.WithError(err).WithField("filename", tmpFile).Error("failed to generate thumbnail")
-		return
+		thumb := imaging.Thumbnail(img, width, height, imaging.CatmullRom)
+		dst := imaging.New(width, height, color.NRGBA{0, 0, 0, 0})
+		dst = imaging.Paste(dst, thumb, image.Pt(0, 0))
+
+		err = imaging.Save(dst, targetFile)
+		if err != nil {
+			log.WithError(err).WithField("filename", targetFile).Error("failed to generate thumbnail")
+			return
+		}
 	}
 
 	var file *os.File
-	file, err = os.Open(tmpFile)
+	file, err = os.Open(targetFile)
 	if err != nil {
-		log.WithError(err).WithField("filename", tmpFile).Error("failed to open file")
+		log.WithError(err).WithField("filename", targetFile).Error("failed to open file")
 		return
 	}
 
