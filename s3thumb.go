@@ -30,6 +30,7 @@ const (
 
 var (
 	sess         = session.Must(session.NewSession())
+	s3client     = s3.New(sess)
 	uploader     = s3manager.NewUploader(sess)
 	downloader   = s3manager.NewDownloader(sess)
 	contentTypes = map[string]string{
@@ -47,6 +48,8 @@ type (
 		Format string
 		Width  int
 		Height int
+
+		CacheControl string
 	}
 
 	Option struct {
@@ -116,6 +119,18 @@ func (f *File) Download() (err error) {
 		return
 	}
 
+	var output *s3.GetObjectOutput
+	output, err = s3client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(f.Bucket),
+		Key:    aws.String(f.Key),
+	})
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{"bucket": f.Bucket, "key": f.Key}).Error("failed to get object")
+		return
+	}
+	f.CacheControl = *output.CacheControl
+	log.WithFields(log.Fields{"cache-control": f.CacheControl}).Info("get object info")
+
 	var n int64
 	n, err = downloader.Download(file, &s3.GetObjectInput{
 		Bucket: aws.String(f.Bucket),
@@ -168,11 +183,12 @@ func (f *File) ResizeAndUpload(width, height int, suffix string) (err error) {
 	newKey := f.Key + "/" + suffix
 	var result *s3manager.UploadOutput
 	result, err = uploader.Upload(&s3manager.UploadInput{
-		ACL:         aws.String("public-read"),
-		Bucket:      aws.String(f.Bucket),
-		ContentType: aws.String(contentTypes[f.Format]),
-		Key:         aws.String(newKey),
-		Body:        file,
+		ACL:          aws.String("public-read"),
+		Bucket:       aws.String(f.Bucket),
+		CacheControl: aws.String(f.CacheControl),
+		ContentType:  aws.String(contentTypes[f.Format]),
+		Key:          aws.String(newKey),
+		Body:         file,
 	})
 
 	if err != nil {
